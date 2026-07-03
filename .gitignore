@@ -6,3 +6,4 @@ feature_store
 mlflow.db
 mlruns
 backend/.env
+mysql-vm-key.pem

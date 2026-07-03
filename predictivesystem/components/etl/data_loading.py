@@ -16,20 +16,23 @@ class DataLoader:
         self.data_loading_config = data_loading_config
         self.database_manager = DatabaseManager(config=self.data_loading_config.database_config)
     
-    def _load_dataframe(self, df : pd.DataFrame, table_name : str) -> None:
+    def _load_dataframe(self, csv_path : str, table_name : str) -> None:
         try:
-            columns = df.columns.to_list()
+            columns = None
+            query = None
 
-            query = f"""
-            INSERT IGNORE INTO {table_name} ({','.join(columns)}) VALUES ({','.join(['%s'] * len(columns))})
-            """
+            for chunk in pd.read_csv(csv_path, chunksize=1000):
+                if query is None:
+                    columns = chunk.columns.tolist()
+                    query = f"""
+                    INSERT IGNORE INTO {table_name} ({','.join(columns)}) VALUES ({','.join(['%s'] * len(columns))}) 
+                    """
+                
+                records = list(chunk.itertuples(index=False, name=None))
 
-            records = list(df.itertuples(index=False, name=None))
+                self.database_manager.execute_many(query, records)
+                self.database_manager.commit()
 
-            self.database_manager.execute_many(query=query, params=records)
-
-            logging.info(f'Loaded {len(records)} into {table_name}')
-        
         except Exception as e:
             raise PredictiveMaintenanceException(e, sys)
         
@@ -40,13 +43,13 @@ class DataLoader:
 
                 self.database_manager.connect()
 
-                train_features = pd.read_csv(self.data_transformation_artifact.transformed_train_data_path)
-                test_features = pd.read_csv(self.data_transformation_artifact.transformed_test_data_path)
-                test_targets = pd.read_csv(self.data_transformation_artifact.transformed_test_target_path)
+                train_features_path = self.data_transformation_artifact.transformed_train_data_path
+                test_features_path = self.data_transformation_artifact.transformed_test_data_path
+                test_targets_path = self.data_transformation_artifact.transformed_test_target_path
 
-                self._load_dataframe(df=train_features, table_name=self.data_loading_config.train_features_table_name)
-                self._load_dataframe(df=test_features, table_name=self.data_loading_config.test_features_table_name)
-                self._load_dataframe(df=test_targets, table_name=self.data_loading_config.test_targets_table_name)
+                self._load_dataframe(csv_path=train_features_path, table_name=self.data_loading_config.train_features_table_name)
+                self._load_dataframe(csv_path=test_features_path, table_name=self.data_loading_config.test_features_table_name)
+                self._load_dataframe(csv_path=test_targets_path, table_name=self.data_loading_config.test_targets_table_name)
 
                 self.database_manager.commit()
 
