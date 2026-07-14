@@ -526,24 +526,81 @@ The trained models are deployed through FastAPI and Azure Blob Storage.
 
 ## Backend APIs
 
-### Batch Prediction API
+The backend is a **FastAPI** service that loads the hybrid XGBoost + LSTM model at startup (via MLflow, with artifacts pulled from Azure Blob Storage), keeps a rolling per-engine state in memory, and exposes REST + WebSocket endpoints for batch and real-time inference.
 
-Provides fleet-level predictions for multiple engines simultaneously.
+### Architecture
 
-### Stream Prediction API
+```text
+app.py            → FastAPI app, lifespan hook, router registration
+startup.py        → Loads model + scaler from Azure Blob via MLflow on startup
+config.py         → Centralized settings (feature columns, sequence length, thresholds)
 
-Provides real-time predictions for continuously arriving telemetry.
+routers/          → API route definitions
+services/         → Business logic (prediction orchestration, blob loading)
+schemas/          → Pydantic request/response models
+utils/            → Feature engineering, sequence buffering, engine state, alerting
+websocket_manager/→ Active WebSocket connection registry & broadcast
+```
+
+### Endpoints
+
+| Method | Endpoint                     | Description                                                        |
+| ------ | ----------------------------- | -------------------------------------------------------------------- |
+| GET    | `/`                            | API metadata and loaded model version                                |
+| GET    | `/health`                      | Backend health check and model-load status                           |
+| POST   | `/predict/batch`                | Accepts a CSV upload, runs feature extraction + hybrid inference for every engine, returns a downloadable predictions CSV |
+| POST   | `/predict/stream`                | Accepts a single sensor reading (cycle) for one engine, updates its sliding window, and returns a live prediction once enough cycles have accumulated |
+| GET    | `/engines`                     | Returns the latest known state for every tracked engine (fleet snapshot) |
+| GET    | `/engines/{engine_id}`          | Returns the latest state for a single engine                         |
+| GET    | `/engines/{engine_id}/history`  | Returns the full prediction history for a single engine              |
+| GET    | `/engines/{engine_id}/details`  | Returns current state + history + history length for a single engine |
+| WS     | `/ws`                          | Streams live `engine_update` events to connected dashboard clients   |
+
+### Batch Prediction Flow
+
+1. A CSV of raw sensor readings for one or more engines is uploaded
+2. `FeatureProcessor` engineers rolling, delta, slope, health-index, and baseline-deviation features per engine
+3. The hybrid model produces an LSTM-based RUL estimate and an XGBoost-based failure probability for each engine
+4. Results are written to a temporary CSV and returned as a file download, then cleaned up as a background task
+
+### Stream Prediction Flow
+
+1. Each incoming reading is appended to a per-engine `SequenceBuffer` (sliding window of the last 30 cycles)
+2. Once 30 cycles have accumulated, the same feature pipeline used for batch prediction is applied to the buffered sequence
+3. The hybrid model returns `predicted_rul` and `failure_probability`, which `AlertGenerator` converts into an alert level (`SAFE`, `WARNING`, `CRITICAL`, `FAILURE_IMMINENT`)
+4. The result is stored in `EngineStateStore` (latest state + bounded history) and broadcast to all connected WebSocket clients
 
 ### Example Response
 
 ```json
 {
+  "status": "ready",
   "engine_id": 101,
+  "cycle": 43,
   "predicted_rul": 43,
-  "confidence": 0.94,
-  "health_status": "Degrading"
+  "failure_probability": 0.94,
+  "alert_level": "CRITICAL",
+  "alert_message": "Immediate maintenance recommended."
 }
 ```
+
+---
+
+## Interactive Dashboard
+
+A multi-page **Streamlit** dashboard consumes the backend APIs to give maintenance teams fleet-wide visibility and live per-engine monitoring.
+
+### Real-Time Update Flow
+
+```text
+Backend /ws  →  websocket_client (background thread)  →  update_queue
+                                                              ↓
+                                        dashboard_state.process_updates()
+                                                              ↓
+                                          Streamlit session state → UI re-render
+```
+
+Because Streamlit re-runs the script top-to-bottom on every interaction, the WebSocket listener runs on a separate daemon thread and simply drops updates into a queue; `DashboardState.process_updates()` drains that queue at the top of every page load so new predictions are reflected without blocking the UI.
 
 ---
 
@@ -586,16 +643,45 @@ aircraft-predictive-maintenance/
 │   ├── services/
 │   ├── schemas/
 │   ├── utils/
+│   ├── websocket_manager/
 │   ├── app.py
 │   ├── startup.py
 │   ├── config.py
-│   └── .env
+│   ├── .env
+│   ├── Dockerfile
+│
+├── dashboard/
+│   ├── components/
+│   ├── pages/
+│   ├── services/
+│   ├── state/
+│   ├── utils/
+│   ├── home.py
+│   ├── .env
+│   ├── Dockerfile
 │
 ├── mlruns/
 ├── configs/
 ├── requirements.txt
+├── docker-compose.yml
 └── README.md
 ```
+---
+
+## Challenges & Key Learnings
+
+### 1. Packaging a Custom Hybrid Model for Deployment
+
+The hybrid model (XGBoost classifier + LSTM regressor wrapped together as a single `mlflow.pyfunc` model) was built around a custom Python class defined inside this project's own codebase. This worked seamlessly during local training and experimentation, since the class was always importable from the working directory. However, once the backend was containerized with Docker, model loading failed at startup — MLflow could not resolve the custom class, because the module defining it wasn't available on the container's Python path.
+
+**Solution:** The model was logged to MLflow using the `code_paths` parameter, which bundles the source file(s) defining the custom `pyfunc` class alongside the model artifact itself. This ensures that whenever the model is loaded — in any environment, including a minimal Docker image — MLflow also restores the exact class definition it depends on, without requiring the deployment environment to separately install or reference the project's source code. This turned model loading into a fully self-contained, environment-agnostic step.
+
+### 2. Delivering Real-Time Predictions to the Dashboard
+
+The initial approach for real-time monitoring was to have the Streamlit dashboard poll the `/predict/stream` and `/engines` REST endpoints on a fixed interval. In practice, this introduced a trade-off that never felt right: short polling intervals hammered the backend with redundant requests, while longer intervals made the dashboard feel laggy and caused it to miss rapid state changes — undermining the goal of *real-time* engine monitoring.
+
+**Solution:** The stream prediction service was changed to broadcast every new prediction over a **WebSocket** connection (`/ws`) the moment it's computed, instead of waiting to be asked for it. On the dashboard side, a background thread (`websocket_client.py`) maintains a persistent connection and pushes incoming updates onto a thread-safe queue, which the Streamlit UI drains on each render (`DashboardState.process_updates()`). This removed polling entirely, eliminated redundant network calls, and gave the dashboard uninterrupted, low-latency updates as engine telemetry arrives.
+
 ---
 
 ## Results Summary
