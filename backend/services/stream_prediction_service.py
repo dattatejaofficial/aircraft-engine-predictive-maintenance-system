@@ -2,7 +2,7 @@ from utils.feature_processor import FeatureProcessor
 from utils.sequence_buffer import SequenceBuffer
 from utils.alert_generator import AlertGenerator
 from utils.engine_state_store import engine_state_store
-from websocket.connection_manager import manager
+from websocket_manager.connection_manager import manager
 
 class StreamPredictionService:
     @staticmethod

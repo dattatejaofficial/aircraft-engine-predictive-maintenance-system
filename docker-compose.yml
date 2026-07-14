@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    
+    container_name: aircraft-backend
+
+    ports:
+      - "8000:8000"
+    
+    restart: unless-stopped
+  
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    
+    container_name: aircraft-dashboard
+
+    depends_on:
+      - backend
+    
+    ports:
+      - "8501:8501"
+    
+    environment:
+      BASE_API_URL: "http://backend:8000"
+      WEBSOCKET_URL: "ws://backend:8000/ws"
+    
+    restart: unless-stopped

@@ -35,7 +35,7 @@ class DatabaseConfig:
 
         database_config = config['database_details']    
 
-        self.host = database_config['host']
+        self.host = os.getenv('MYSQL_HOST')
         self.port = database_config['port']
         self.database = database_config['database']
         self.username = os.getenv('MYSQL_USERNAME')

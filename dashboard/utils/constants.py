@@ -2,13 +2,10 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 
-API_HOST = os.getenv('API_HOST')
-API_PORT = os.getenv('API_PORT')
-
 # Backend Config
 
-BASE_API_URL = f'http://{API_HOST}:{API_PORT}'
-WEBSOCKET_URL = f'ws://{API_HOST}:{API_PORT}/ws/'
+BASE_API_URL = os.getenv('BASE_API_URL')
+WEBSOCKET_URL = os.getenv('WEBSOCKET_URL')
 
 # API Endpoints
 

@@ -71,7 +71,7 @@ class MLflowManager:
                     failure_threshold=failure_threshold
                 )
 
-                mlflow.pyfunc.log_model(name='hybrid_model', python_model=hybrid_model)
+                mlflow.pyfunc.log_model(name='hybrid_model', python_model=hybrid_model, code_paths=['predictivesystem'])
 
                 logging.info("Successfully logged Hybrid Model")
 

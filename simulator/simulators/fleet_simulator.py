@@ -1,13 +1,17 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import aiohttp
 import pandas as pd
 
 from engine_simulator import EngineSimulator
 
-API_URL = 'http://localhost:8000/predict/stream'
-DATA_PATH = f'test_data/data.csv'
+API_URL = os.getenv('BACKEND_URL')
+DATA_PATH = f'data/train_data.csv'
 
-NUM_ENGINES = 5
+NUM_ENGINES = 50
 MAX_CONCURRENT_REQUESTS = 20
 
 async def main():
